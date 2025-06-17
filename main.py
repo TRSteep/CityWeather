@@ -31,7 +31,27 @@ def fetch_weather_data(latitude, longitude, start_date, end_date):
         "timezone": "auto",
     }
     response = requests.get(url, params=params)
-    return response.json()
+    data = response.json()
+
+    # Если архивных данных нет (например, за вчера/сегодня), запрашиваем прогноз
+    if "daily" not in data or any(temp is None for temp in data["daily"]["temperature_2m_max"]):
+        forecast_url = "https://api.open-meteo.com/v1/forecast"
+        forecast_params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "daily": "temperature_2m_max,temperature_2m_min",
+            "timezone": "auto",
+            "forecast_days": 1,  # Только на 1 день вперед
+        }
+        forecast_response = requests.get(forecast_url, params=forecast_params)
+        forecast_data = forecast_response.json()
+
+        # Объединяем архивные и прогнозные данные
+        if "daily" in forecast_data:
+            for key in ["temperature_2m_max", "temperature_2m_min"]:
+                data["daily"][key][-1] = forecast_data["daily"][key][0]  # Заменяем последний день
+
+    return data
 
 
 def clean_data(temp_data):
@@ -50,9 +70,24 @@ def clean_data(temp_data):
 def plot_weather(data, city):
     """Строит график температуры с аннотациями и легендой"""
     dates = [datetime.strptime(d, "%Y-%m-%d").date() for d in data["daily"]["time"]]
-    temp_max = clean_data(data["daily"]["temperature_2m_max"])
-    temp_min = clean_data(data["daily"]["temperature_2m_min"])
+    temp_max = data["daily"]["temperature_2m_max"]
+    temp_min = data["daily"]["temperature_2m_min"]
 
+    # Убираем дни, где данные отсутствуют (None)
+    valid_dates = []
+    valid_max = []
+    valid_min = []
+    for i in range(len(dates)):
+        if temp_max[i] is not None and temp_min[i] is not None:
+            valid_dates.append(dates[i])
+            valid_max.append(temp_max[i])
+            valid_min.append(temp_min[i])
+
+    if not valid_dates:
+        print("⚠ Нет данных для построения графика!")
+        return
+
+    # Дальше рисуем график как обычно, но с valid_dates, valid_max, valid_min
     plt.figure(figsize=(12, 6))
 
     # Графики с маркерами
