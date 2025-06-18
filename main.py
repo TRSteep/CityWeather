@@ -198,6 +198,7 @@ def main():
         data = fetch_weather_data(latitude, longitude, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
 
         if "daily" in data:
+            print(f"Координаты города {city}: {latitude}, {longitude}")
             plot_weather(data, city)
         else:
             print("Ошибка: Не удалось получить данные.")
