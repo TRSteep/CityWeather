@@ -1,21 +1,37 @@
 import requests
 from datetime import datetime, date, timedelta
+# Plot
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+# GEO lib
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderUnavailable, GeocoderTimedOut
 
 
 def get_coordinates(city):
-    """Упрощенный геокодинг (в реальном проекте лучше использовать Nominatim или Google Geocoding)"""
-    city_coords = {
-        "москва": (55.7558, 37.6176),
-        "санкт-петербург": (59.9343, 30.3351),
-        "новосибирск": (55.0084, 82.9357),
-        "екатеринбург": (56.8389, 60.6057),
-        "казань": (55.7961, 49.1064),
-        "уфа": ( 54.74206, 55.91325)
-    }
-    return city_coords.get(city.lower(), (54.73780, 55.94188))  # По умолчанию Уфа
-    # 54.73780578618976, 55.941883002007735
+    """
+    Получает координаты города через Nominatim API.
+    По умолчанию ищет в России, но поддерживает международные города.
+    Возвращает (широта, долгота) или координаты Уфы (54.73780, 55.94188) при ошибке.
+    """
+    # Если города нет в словаре, используем API Nominatim
+    try:
+        geolocator = Nominatim(user_agent="weather_app")
+        # Сначала пробуем искать с привязкой к России
+        location = geolocator.geocode(f"{city}, Россия", exactly_one=True)
+        # Если не найдено в России, ищем без указания страны
+        if not location:
+            location = geolocator.geocode(city, exactly_one=True)
+
+        if location:
+            return (location.latitude, location.longitude)
+        else:
+            print(f"⚠ Город '{city}' не найден. Используются координаты Уфы.")
+            return (54.73780, 55.94188)
+
+    except (GeocoderUnavailable, GeocoderTimedOut, requests.exceptions.RequestException) as e:
+        print(f"⚠ Ошибка геокодинга: {e}. Используются координаты Уфы.")
+        return (54.73780, 55.94188)
 
 
 def fetch_weather_data(latitude, longitude, start_date, end_date):
@@ -152,6 +168,8 @@ def main():
     print("-------------------------------------------")
 
     city = input("Введите город (Enter для Уфы): ").strip()
+    if city == "":
+        city = "Уфа"
     date_str = input("Введите дату в формате ГГГГ-ММ-ДД (Enter для последних 7 дней): ").strip()
 
     latitude, longitude = get_coordinates(city)
@@ -161,6 +179,7 @@ def main():
         try:
             target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
             data = fetch_weather_data(latitude, longitude, date_str, date_str)
+            print(f"Координаты города {city}: {latitude}, {longitude}")
 
             if "daily" in data:
                 temp_max = data["daily"]["temperature_2m_max"][0]
