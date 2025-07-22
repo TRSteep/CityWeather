@@ -1,11 +1,19 @@
 import requests
 from datetime import datetime, date, timedelta
-# Plot
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-# GEO lib
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderUnavailable, GeocoderTimedOut
+import os
+from dotenv import load_dotenv
+
+# Загрузка API ключа из .env файла
+load_dotenv()
+API_KEY = os.getenv('VISUAL_CROSSING_API_KEY')
+
+if not API_KEY:
+    print("⚠ Ошибка: Не найден API ключ Visual Crossing. Пожалуйста, создайте файл .env с ключом.")
+    exit(1)
 
 
 def get_coordinates(city):
@@ -24,86 +32,60 @@ def get_coordinates(city):
             location = geolocator.geocode(city, exactly_one=True)
 
         if location:
-            return (location.latitude, location.longitude)
+            return location.latitude, location.longitude
         else:
             print(f"⚠ Город '{city}' не найден. Используются координаты Уфы.")
-            return (54.73780, 55.94188)
+            return 54.73780, 55.94188
 
     except (GeocoderUnavailable, GeocoderTimedOut, requests.exceptions.RequestException) as e:
         print(f"⚠ Ошибка геокодинга: {e}. Используются координаты Уфы.")
-        return (54.73780, 55.94188)
+        return 54.73780, 55.94188
 
 
 def fetch_weather_data(latitude, longitude, start_date, end_date):
-    """Запрашивает архивные данные, а если их нет — прогнозные"""
-    # Запрос архивных данных
-    url = "https://archive-api.open-meteo.com/v1/archive"
-    params = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "start_date": start_date,
-        "end_date": end_date,
-        "daily": "temperature_2m_max,temperature_2m_min",
-        "timezone": "auto",
-    }
-    response = requests.get(url, params=params)
-    data = response.json()
+    """Запрашивает данные о погоде с Visual Crossing Weather API"""
+    base_url = "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/"
 
-    # Если архивных данных нет (например, за вчера/сегодня), запрашиваем прогноз
-    if "daily" not in data or any(temp is None for temp in data["daily"]["temperature_2m_max"]):
-        forecast_url = "https://api.open-meteo.com/v1/forecast"
-        forecast_params = {
-            "latitude": latitude,
-            "longitude": longitude,
-            "daily": "temperature_2m_max,temperature_2m_min",
-            "timezone": "auto",
-            "forecast_days": 1,  # Только на 1 день вперед
+    # Формируем URL запроса
+    location = f"{latitude},{longitude}"
+    url = f"{base_url}{location}/{start_date}/{end_date}?unitGroup=metric&include=days&key={API_KEY}&contentType=json"
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+
+        # Обрабатываем данные в едином формате
+        processed_data = {
+            "daily": {
+                "time": [],
+                "temperature_2m_max": [],
+                "temperature_2m_min": []
+            }
         }
-        forecast_response = requests.get(forecast_url, params=forecast_params)
-        forecast_data = forecast_response.json()
 
-        # Объединяем архивные и прогнозные данные
-        if "daily" in forecast_data:
-            for key in ["temperature_2m_max", "temperature_2m_min"]:
-                data["daily"][key][-1] = forecast_data["daily"][key][0]  # Заменяем последний день
+        for day in data.get('days', []):
+            processed_data["daily"]["time"].append(day['datetime'])
+            processed_data["daily"]["temperature_2m_max"].append(day['tempmax'])
+            processed_data["daily"]["temperature_2m_min"].append(day['tempmin'])
 
-    return data
+        return processed_data
 
-
-def clean_data(temp_data):
-    """Заменяет None на предыдущее допустимое значение"""
-    clean = []
-    last_valid = None
-    for temp in temp_data:
-        if temp is not None:
-            clean.append(temp)
-            last_valid = temp
-        else:
-            clean.append(last_valid if last_valid is not None else 0)  # Если нет данных, ставим 0
-    return clean
+    except requests.exceptions.RequestException as e:
+        print(f"⚠ Ошибка при запросе данных о погоде: {e}")
+        return None
 
 
 def plot_weather(data, city):
     """Строит график температуры с аннотациями и легендой"""
+    if not data or "daily" not in data:
+        print("⚠ Нет данных для построения графика!")
+        return
+
     dates = [datetime.strptime(d, "%Y-%m-%d").date() for d in data["daily"]["time"]]
     temp_max = data["daily"]["temperature_2m_max"]
     temp_min = data["daily"]["temperature_2m_min"]
 
-    # Убираем дни, где данные отсутствуют (None)
-    valid_dates = []
-    valid_max = []
-    valid_min = []
-    for i in range(len(dates)):
-        if temp_max[i] is not None and temp_min[i] is not None:
-            valid_dates.append(dates[i])
-            valid_max.append(temp_max[i])
-            valid_min.append(temp_min[i])
-
-    if not valid_dates:
-        print("⚠ Нет данных для построения графика!")
-        return
-
-    # Дальше рисуем график как обычно, но с valid_dates, valid_max, valid_min
     plt.figure(figsize=(12, 6))
 
     # Графики с маркерами
@@ -115,7 +97,7 @@ def plot_weather(data, city):
     # Аннотации для максимальной температуры
     for date_, temp in zip(dates, temp_max):
         plt.annotate(
-            f"{temp:.1f}°C",
+           f"{temp:.1f}°C",
             (date_, temp),
             textcoords="offset points",
             xytext=(0, 10),
@@ -164,8 +146,8 @@ def plot_weather(data, city):
 
 
 def main():
-    print("🌦️ Программа для анализа погоды (Open-Meteo)")
-    print("-------------------------------------------")
+    print("🌦️ Программа для анализа погоды (Visual Crossing Weather)")
+    print("------------------------------------------------------")
 
     city = input("Введите город (Enter для Уфы): ").strip()
     if city == "":
@@ -177,11 +159,11 @@ def main():
     if date_str:
         # Погода на конкретную дату
         try:
-            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            #target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
             data = fetch_weather_data(latitude, longitude, date_str, date_str)
             print(f"Координаты города {city}: {latitude}, {longitude}")
 
-            if "daily" in data:
+            if data and "daily" in data:
                 temp_max = data["daily"]["temperature_2m_max"][0]
                 temp_min = data["daily"]["temperature_2m_min"][0]
                 print(f"\n📅 Погода в {city.capitalize()} на {date_str}:")
@@ -192,12 +174,13 @@ def main():
         except ValueError:
             print("⚠ Неверный формат даты!")
     else:
-        # Погода за последние 7 дней
-        end_date = date.today() - timedelta(days=1)
-        start_date = end_date - timedelta(days=7)
+        # Погода за последние 7 дней (включая сегодня)
+        end_date = date.today()
+        start_date = end_date - timedelta(days=6)  # 7 дней включая сегодня
+
         data = fetch_weather_data(latitude, longitude, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
 
-        if "daily" in data:
+        if data and "daily" in data:
             print(f"Координаты города {city}: {latitude}, {longitude}")
             plot_weather(data, city)
         else:
