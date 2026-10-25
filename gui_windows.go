@@ -95,16 +95,19 @@ type uiResult struct {
 	search bool
 }
 type weatherUI struct {
-	hwnd, font   uintptr
-	controls     map[int]uintptr
-	all, visible []City
-	service      *service
-	results      chan uiResult
-	cancel       context.CancelFunc
-	busy         bool
-	scale        float64
-	rows         []DayRow
-	copyColumn   int
+	hwnd, font         uintptr
+	controls           map[int]uintptr
+	all, visible       []City
+	service            *service
+	results            chan uiResult
+	cancel             context.CancelFunc
+	busy               bool
+	scale              float64
+	rows               []DayRow
+	copyColumn         int
+	selectedRow        int
+	store              cityStore
+	persistenceWarning string
 }
 
 const (
@@ -125,6 +128,7 @@ const (
 	idReport
 	idCopyMorning
 	idCopyAfternoon
+	idDeleteCity
 )
 const resultMessage = 0x8001
 
@@ -172,7 +176,8 @@ func runGUI(cities []City) error {
 	if atom == 0 {
 		return err
 	}
-	ui := &weatherUI{all: cities, visible: cities, service: newService(), controls: make(map[int]uintptr), results: make(chan uiResult, 1), scale: scale, copyColumn: 1}
+	prefs, prefsErr := loadPreferences(dataDirectory())
+	ui := &weatherUI{all: cities, visible: cities, service: newService(), controls: make(map[int]uintptr), results: make(chan uiResult, 1), scale: scale, copyColumn: 1, selectedRow: -1, store: cityStore{dir: dataDirectory(), cities: cities, prefs: prefs}}
 	activeUI = ui
 	defer func() {
 		activeUI = nil
@@ -191,6 +196,9 @@ func runGUI(cities []City) error {
 	if err := ui.build(); err != nil {
 		user32.NewProc("DestroyWindow").Call(hwnd)
 		return err
+	}
+	if prefsErr != nil {
+		caption(ui.controls[idStatus], "Не удалось прочитать последний город: "+prefsErr.Error())
 	}
 	ui.layout()
 	user32.NewProc("ShowWindow").Call(hwnd, 5)
@@ -229,6 +237,7 @@ func (ui *weatherUI) build() error {
 		{idSearch, "BUTTON", "Найти в интернете", 0x00010000},
 		{idCityLabel, "STATIC", "Город — выберите из списка или результатов поиска", 0},
 		{idCity, "COMBOBOX", "", 0x00010000 | 0x00200000 | 3},
+		{idDeleteCity, "BUTTON", "Удалить город", 0x00010000},
 		{idDaysLabel, "STATIC", "Прошедших дней (1–366)", 0},
 		{idDays, "EDIT", "7", 0x00800000 | 0x00010000 | 0x2000},
 		{idFetch, "BUTTON", "Запросить погоду", 0x00010000 | 1},
@@ -258,7 +267,17 @@ func (ui *weatherUI) build() error {
 		col := listColumn{Mask: 7, Width: int32(ui.px(widths[i])), Text: utf16(h)}
 		send(ui.controls[idTable], 0x1061, uintptr(i), uintptr(unsafe.Pointer(&col)))
 	}
-	ui.setCities(ui.all)
+	initial := ui.all
+	if last := ui.store.prefs.LastCity; last != nil && cityIndex(initial, *last) < 0 {
+		initial = append(append([]City{}, initial...), *last)
+	}
+	ui.setCities(initial)
+	if last := ui.store.prefs.LastCity; last != nil {
+		if index := cityIndex(initial, *last); index >= 0 {
+			send(ui.controls[idCity], 0x14E, uintptr(index), 0)
+		}
+	}
+	ui.updateDeleteButton()
 	ui.enable(idCancel, false)
 	ui.enable(idCopyMorning, false)
 	ui.enable(idCopyAfternoon, false)
@@ -282,6 +301,43 @@ func (ui *weatherUI) setCities(cities []City) {
 	if len(cities) > 0 {
 		send(h, 0x14E, 0, 0)
 	}
+	ui.updateDeleteButton()
+}
+
+func (ui *weatherUI) selectedCity() (City, bool) {
+	index := int32(send(ui.controls[idCity], 0x147, 0, 0))
+	if index < 0 || int(index) >= len(ui.visible) {
+		return City{}, false
+	}
+	return ui.visible[index], true
+}
+
+func (ui *weatherUI) updateDeleteButton() {
+	city, ok := ui.selectedCity()
+	ui.enable(idDeleteCity, !ui.busy && ok && cityIndex(ui.all, city) >= 0)
+}
+
+func (ui *weatherUI) deleteCity() {
+	if ui.busy {
+		return
+	}
+	city, ok := ui.selectedCity()
+	if !ok {
+		return
+	}
+	err := ui.store.remove(city)
+	ui.all = ui.store.cities
+	caption(ui.controls[idQuery], "")
+	ui.setCities(ui.all)
+	if err != nil {
+		caption(ui.controls[idStatus], err.Error())
+		return
+	}
+	caption(ui.controls[idStatus], "Город удалён из списка: "+city.label())
+}
+
+func (ui *weatherUI) repaintTable() {
+	user32.NewProc("InvalidateRect").Call(ui.controls[idTable], 0, 0)
 }
 func (ui *weatherUI) layout() {
 	if ui.controls[idTable] == 0 {
@@ -304,7 +360,8 @@ func (ui *weatherUI) layout() {
 	move(idQuery, 24, 88, w-254, 32)
 	move(idSearch, w-214, 87, 190, 34)
 	move(idCityLabel, 24, 132, w-320, 24)
-	move(idCity, 24, 160, w-320, 320)
+	move(idCity, 24, 160, w-510, 320)
+	move(idDeleteCity, w-486, 159, 190, 34)
 	move(idDaysLabel, w-274, 132, 250, 24)
 	move(idDays, w-274, 160, 250, 32)
 	move(idFetch, 24, 212, 244, 34)
@@ -343,11 +400,16 @@ func (ui *weatherUI) start(search bool) {
 			caption(ui.controls[idStatus], "Укажите целое число дней от 1 до 366.")
 			return
 		}
+		ui.persistenceWarning = ""
+		if err := ui.store.remember(city); err != nil {
+			ui.persistenceWarning = err.Error()
+		}
 	}
 	ui.busy = true
 	for _, id := range []int{idQuery, idSearch, idCity, idDays, idFetch} {
 		ui.enable(id, false)
 	}
+	ui.updateDeleteButton()
 	ui.enable(idCancel, true)
 	status := "Загрузка погоды: " + city.label() + "…"
 	if search {
@@ -382,6 +444,7 @@ func (ui *weatherUI) completed() {
 	for _, id := range []int{idQuery, idSearch, idCity, idDays, idFetch} {
 		ui.enable(id, true)
 	}
+	ui.updateDeleteButton()
 	ui.enable(idCancel, false)
 	if result.err != nil {
 		text := "Ошибка: " + result.err.Error()
@@ -390,6 +453,9 @@ func (ui *weatherUI) completed() {
 		}
 		if result.err == context.DeadlineExceeded {
 			text = "Время ожидания истекло. Повторите запрос."
+		}
+		if ui.persistenceWarning != "" {
+			text += "; " + ui.persistenceWarning
 		}
 		caption(ui.controls[idStatus], text)
 		return
@@ -400,8 +466,14 @@ func (ui *weatherUI) completed() {
 		return
 	}
 	report := result.report
+	city := report.City
+	city.Timezone = report.Timezone
+	added, saveErr := ui.store.add(city)
+	ui.all = ui.store.cities
+	ui.updateDeleteButton()
 	ui.rows = report.Rows
 	ui.copyColumn = 1
+	ui.selectedRow = -1
 	ui.enable(idCopyMorning, true)
 	ui.enable(idCopyAfternoon, true)
 	send(ui.controls[idTable], 0xB, 0, 0)
@@ -429,14 +501,24 @@ func (ui *weatherUI) completed() {
 	send(ui.controls[idTable], 0xB, 1, 0)
 	user32.NewProc("InvalidateRect").Call(ui.controls[idTable], 0, 1)
 	caption(ui.controls[idReport], fmt.Sprintf("%s • %s — %s • %s", report.City.label(), report.Start, report.End, report.Timezone))
-	caption(ui.controls[idStatus], fmt.Sprintf("Дней: %d. Пропусков: %d. Двойной щелчок по температуре или Ctrl+C — копировать число.", len(report.Rows), missing))
+	status := fmt.Sprintf("Дней: %d. Пропусков: %d. Двойной щелчок по температуре или Ctrl+C — копировать число.", len(report.Rows), missing)
+	if added {
+		status = "Город добавлен в список. " + status
+	}
+	if saveErr != nil {
+		status = saveErr.Error() + ". Погода загружена."
+	}
+	if ui.persistenceWarning != "" {
+		status += " " + ui.persistenceWarning
+	}
+	caption(ui.controls[idStatus], status)
 }
 
 func (ui *weatherUI) copyTemperature(column int, all bool) {
 	rows := ui.rows
 	if !all {
 		// LVM_GETNEXTITEM: focused/selected row; the column follows the last cell click.
-		selected := int32(send(ui.controls[idTable], 0x100C, ^uintptr(0), 2))
+		selected := ui.selectedRow
 		if selected < 0 || int(selected) >= len(rows) {
 			caption(ui.controls[idStatus], "Выберите ячейку температуры для копирования.")
 			return
@@ -500,6 +582,60 @@ func copyToClipboard(owner uintptr, text string) error {
 	return nil
 }
 
+func (ui *weatherUI) drawCell(draw *listCustomDraw) uintptr {
+	row, col := int(draw.Item), int(draw.SubItem)
+	if row < 0 || row >= len(ui.rows) || col < 0 || col > 6 {
+		return 0
+	}
+	var bounds rect
+	bounds.Top = int32(col)
+	send(ui.controls[idTable], 0x1038, uintptr(row), uintptr(unsafe.Pointer(&bounds))) // LVM_GETSUBITEMRECT
+	if col == 0 {
+		bounds.Right = bounds.Left + int32(send(ui.controls[idTable], 0x101D, 0, 0))
+	}
+	background, foreground := uint32(0xFFFFFF), uint32(0x302A24)
+	if col == 1 {
+		background, foreground = 0xFFF2E6, 0x854500
+	}
+	if col == 4 {
+		background, foreground = 0xE6F1FF, 0x194A91
+	}
+	active := row == ui.selectedRow && col == ui.copyColumn
+	if row == ui.selectedRow {
+		switch col {
+		case 1:
+			background = 0xF3E8DC
+		case 4:
+			background = 0xDCE8F3
+		default:
+			background = 0xF5F2EF
+		}
+	}
+	if active {
+		background = 0xF5E4D4
+	}
+	brush, _, _ := gdi32.NewProc("CreateSolidBrush").Call(uintptr(background))
+	user32.NewProc("FillRect").Call(draw.DC, uintptr(unsafe.Pointer(&bounds)), brush)
+	gdi32.NewProc("DeleteObject").Call(brush)
+	day := ui.rows[row]
+	date, _ := time.Parse(time.DateOnly, day.Date)
+	cells := append([]string{date.Format("02.01.2006")}, observationCells(day.Morning)...)
+	cells = append(cells, observationCells(day.Afternoon)...)
+	textBounds := bounds
+	textBounds.Left += int32(ui.px(6))
+	textBounds.Right -= int32(ui.px(4))
+	gdi32.NewProc("SetBkMode").Call(draw.DC, 1)
+	gdi32.NewProc("SetTextColor").Call(draw.DC, uintptr(foreground))
+	gdi32.NewProc("SelectObject").Call(draw.DC, ui.font)
+	user32.NewProc("DrawTextW").Call(draw.DC, uintptr(unsafe.Pointer(utf16(cells[col]))), ^uintptr(0), uintptr(unsafe.Pointer(&textBounds)), 0x4|0x20|0x8000|0x800)
+	if active {
+		border, _, _ := gdi32.NewProc("CreateSolidBrush").Call(0xBB946D)
+		user32.NewProc("FrameRect").Call(draw.DC, uintptr(unsafe.Pointer(&bounds)), border)
+		gdi32.NewProc("DeleteObject").Call(border)
+	}
+	return 4 // CDRF_SKIPDEFAULT prevents the bright native selection overlay.
+}
+
 func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 	ui := activeUI
 	switch msg {
@@ -515,25 +651,19 @@ func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 		case -12: // NM_CUSTOMDRAW
 			draw := (*listCustomDraw)(l)
 			switch draw.Stage {
-			case 1, 0x10001:
-				return 0x20 // Request item and subitem notifications.
+			case 1:
+				return 0x20
+			case 0x10001:
+				return 0x120 // Subitem drawing; suppress the native row focus rectangle.
 			case 0x30001:
-				{
-					switch draw.SubItem {
-					case 1:
-						draw.TextColor, draw.BackgroundColor = 0x854500, 0xFFF2E6
-					case 4:
-						draw.TextColor, draw.BackgroundColor = 0x194A91, 0xE6F1FF
-					default:
-						draw.TextColor, draw.BackgroundColor = 0, 0xFFFFFF
-					}
-					return 2 // CDRF_NEWFONT applies the changed colors to this subitem.
-				}
+				return ui.drawCell(draw)
 			}
 			return 0
 		case -2, -3: // NM_CLICK, NM_DBLCLK
 			cell := (*itemActivate)(l)
 			ui.copyColumn = int(cell.SubItem)
+			ui.selectedRow = int(cell.Item)
+			ui.repaintTable()
 			if header.Code == -3 && cell.Item >= 0 && (cell.SubItem == 1 || cell.SubItem == 4) {
 				ui.copyTemperature(int(cell.SubItem), false)
 			}
@@ -542,6 +672,20 @@ func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 			ctrl, _, _ := user32.NewProc("GetKeyState").Call(0x11)
 			if key == 'C' && ctrl&0x8000 != 0 && (ui.copyColumn == 1 || ui.copyColumn == 4) {
 				ui.copyTemperature(ui.copyColumn, false)
+			}
+			if key == 0x25 && ui.copyColumn > 0 {
+				ui.copyColumn--
+				ui.repaintTable()
+			}
+			if key == 0x27 && ui.copyColumn < 6 {
+				ui.copyColumn++
+				ui.repaintTable()
+			}
+		case -101: // LVN_ITEMCHANGED keeps keyboard row navigation in sync.
+			change := (*itemActivate)(l)
+			if change.Changed&8 != 0 && change.NewState&2 != 0 {
+				ui.selectedRow = int(change.Item)
+				ui.repaintTable()
 			}
 		}
 		return 0
@@ -575,6 +719,8 @@ func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 				ui.copyTemperature(1, true)
 			case idCopyAfternoon:
 				ui.copyTemperature(4, true)
+			case idDeleteCity:
+				ui.deleteCity()
 			case idCancel:
 				if ui.cancel != nil {
 					ui.cancel()
@@ -584,6 +730,9 @@ func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 					ui.cancel()
 				}
 			}
+		}
+		if id == idCity && notification == 1 {
+			ui.updateDeleteButton()
 		}
 		return 0
 	case resultMessage:

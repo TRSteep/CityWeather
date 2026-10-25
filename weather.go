@@ -17,6 +17,7 @@ import (
 )
 
 type City struct {
+	ID       int         `json:"id,omitempty"`
 	Name     string      `json:"name"`
 	Lat      json.Number `json:"lat"`
 	Lon      json.Number `json:"lon"`
@@ -59,8 +60,8 @@ func loadCities(path string) ([]City, error) {
 	if err := json.Unmarshal(data, &cities); err != nil {
 		return nil, fmt.Errorf("ошибка cities.json: %w", err)
 	}
-	if len(cities) == 0 {
-		return nil, errors.New("список cities.json пуст")
+	if cities == nil {
+		cities = []City{}
 	}
 	for _, c := range cities {
 		if err := c.validate(); err != nil {
@@ -153,6 +154,7 @@ func (s *service) search(ctx context.Context, query string) ([]City, error) {
 	params := url.Values{"name": {query}, "count": {"50"}, "language": {"ru"}, "format": {"json"}}
 	var data struct {
 		Results []struct {
+			ID        int     `json:"id"`
 			Name      string  `json:"name"`
 			Latitude  float64 `json:"latitude"`
 			Longitude float64 `json:"longitude"`
@@ -166,7 +168,7 @@ func (s *service) search(ctx context.Context, query string) ([]City, error) {
 	}
 	cities := make([]City, 0, len(data.Results))
 	for _, r := range data.Results {
-		c := City{Name: r.Name, Lat: json.Number(strconv.FormatFloat(r.Latitude, 'f', -1, 64)), Lon: json.Number(strconv.FormatFloat(r.Longitude, 'f', -1, 64)), Timezone: r.Timezone, Country: r.Country, Region: r.Region}
+		c := City{ID: r.ID, Name: r.Name, Lat: json.Number(strconv.FormatFloat(r.Latitude, 'f', -1, 64)), Lon: json.Number(strconv.FormatFloat(r.Longitude, 'f', -1, 64)), Timezone: r.Timezone, Country: r.Country, Region: r.Region}
 		if c.validate() == nil {
 			cities = append(cities, c)
 		}

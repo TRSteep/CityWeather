@@ -197,3 +197,7 @@ cython_debug/
 /weather_archive
 /weather_archive.exe
 /CityWeather.exe
+
+# Personal application state
+/settings.json
+/.cityweather-*.tmp

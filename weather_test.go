@@ -78,7 +78,7 @@ func TestSearchDisambiguatesAndEncodesQuery(t *testing.T) {
 
 func TestCityFileValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cities.json")
-	for _, data := range []string{`[{"name":"A","lat":"0","lon":"0"}]`, `[{"name":"B","lat":-90,"lon":180}]`} {
+	for _, data := range []string{`[]`, `[{"name":"A","lat":"0","lon":"0"}]`, `[{"name":"B","lat":-90,"lon":180}]`} {
 		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -86,7 +86,7 @@ func TestCityFileValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, data := range []string{`[]`, `{`, `[{"name":"A","lat":91,"lon":0}]`, `[{"name":"A","lat":"NaN","lon":"0"}]`, `[{"name":"A","lat":0,"lon":0,"timezone":"Invalid/Zone"}]`} {
+	for _, data := range []string{`{`, `[{"name":"A","lat":91,"lon":0}]`, `[{"name":"A","lat":"NaN","lon":"0"}]`, `[{"name":"A","lat":0,"lon":0,"timezone":"Invalid/Zone"}]`} {
 		os.WriteFile(path, []byte(data), 0600)
 		if _, err := loadCities(path); err == nil {
 			t.Fatalf("accepted %s", data)
