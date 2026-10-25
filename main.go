@@ -8,13 +8,17 @@ import (
 
 func main() {
 	dir := dataDirectory()
+	if err := loadLocale(dir); err != nil {
+		showFatal(tr("locale_error", err))
+		return
+	}
 	cities, err := loadCities(filepath.Join(dir, "cities.json"))
 	if err != nil {
 		showFatal(err.Error())
 		return
 	}
 	if err := runGUI(cities); err != nil {
-		showFatal(fmt.Sprintf("Не удалось открыть окно: %v", err))
+		showFatal(fmt.Sprintf(tr("main_01"), err))
 	}
 }
 

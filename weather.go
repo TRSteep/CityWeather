@@ -41,11 +41,11 @@ func (c City) validate() error {
 	lat, e1 := c.Lat.Float64()
 	lon, e2 := c.Lon.Float64()
 	if strings.TrimSpace(c.Name) == "" || e1 != nil || e2 != nil || math.IsNaN(lat) || math.IsNaN(lon) || math.IsInf(lat, 0) || math.IsInf(lon, 0) || lat < -90 || lat > 90 || lon < -180 || lon > 180 {
-		return fmt.Errorf("некорректное название или координаты города %q", c.Name)
+		return fmt.Errorf(tr("weather_01"), c.Name)
 	}
 	if c.Timezone != "" {
 		if _, err := time.LoadLocation(c.Timezone); err != nil {
-			return fmt.Errorf("неизвестный часовой пояс города %q: %s", c.Name, c.Timezone)
+			return fmt.Errorf(tr("weather_02"), c.Name, c.Timezone)
 		}
 	}
 	return nil
@@ -54,11 +54,11 @@ func (c City) validate() error {
 func loadCities(path string) ([]City, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось прочитать cities.json: %w", err)
+		return nil, fmt.Errorf(tr("weather_03"), err)
 	}
 	var cities []City
 	if err := json.Unmarshal(data, &cities); err != nil {
-		return nil, fmt.Errorf("ошибка cities.json: %w", err)
+		return nil, fmt.Errorf(tr("weather_04"), err)
 	}
 	if cities == nil {
 		cities = []City{}
@@ -97,8 +97,10 @@ type archiveResponse struct {
 	} `json:"hourly"`
 }
 type DayRow struct {
-	Date               string
-	Morning, Afternoon *Observation
+	Date                             string
+	Morning, Afternoon               *Observation
+	Today                            bool
+	MorningPending, AfternoonPending bool
 }
 type WeatherReport struct {
 	City                 City
@@ -112,36 +114,36 @@ type service struct {
 }
 
 func newService() *service {
-	return &service{client: &http.Client{Timeout: 30 * time.Second}, weatherURL: "https://archive-api.open-meteo.com/v1/archive", geocodeURL: "https://geocoding-api.open-meteo.com/v1/search", now: time.Now}
+	return &service{client: &http.Client{Timeout: 30 * time.Second}, weatherURL: archiveURL, geocodeURL: geocodingURL, now: time.Now}
 }
 
 func (s *service) getJSON(ctx context.Context, endpoint string, result any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return errors.New("не удалось создать запрос")
+		return errors.New(tr("weather_05"))
 	}
-	req.Header.Set("User-Agent", "CityWeather/1.0")
+	req.Header.Set("User-Agent", appName+"/"+appVersion)
 	resp, err := s.client.Do(req)
 	// Keep messages independent of transport details.
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return errors.New("не удалось подключиться к сервису; проверьте интернет и повторите запрос")
+		return errors.New(tr("weather_06"))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		switch resp.StatusCode {
 		case 401, 403:
-			return errors.New("Open-Meteo отклонил запрос; повторите позже")
+			return errors.New(tr("weather_07"))
 		case 429:
-			return errors.New("превышен лимит запросов сервиса; повторите позже или уменьшите период")
+			return errors.New(tr("weather_08"))
 		default:
-			return fmt.Errorf("сервис вернул HTTP %d; повторите запрос позже", resp.StatusCode)
+			return fmt.Errorf(tr("weather_09"), resp.StatusCode)
 		}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(result); err != nil {
-		return errors.New("сервис вернул некорректные или слишком большие данные")
+		return errors.New(tr("weather_10"))
 	}
 	return nil
 }
@@ -149,9 +151,9 @@ func (s *service) getJSON(ctx context.Context, endpoint string, result any) erro
 func (s *service) search(ctx context.Context, query string) ([]City, error) {
 	query = strings.TrimSpace(query)
 	if len([]rune(query)) < 2 {
-		return nil, errors.New("введите не менее двух букв названия города")
+		return nil, errors.New(tr("weather_11"))
 	}
-	params := url.Values{"name": {query}, "count": {"50"}, "language": {"ru"}, "format": {"json"}}
+	params := url.Values{"name": {query}, "count": {"50"}, "language": {tr("api_language")}, "format": {"json"}}
 	var data struct {
 		Results []struct {
 			ID        int     `json:"id"`
@@ -189,12 +191,12 @@ func (s *service) fetchArchive(ctx context.Context, city City, zone, start, end 
 }
 
 func pastPeriod(now time.Time, zone string, days int) (time.Time, time.Time, error) {
-	if days < 1 || days > 366 {
-		return time.Time{}, time.Time{}, errors.New("укажите целое число дней от 1 до 366")
+	if days < 1 || days > maxDays {
+		return time.Time{}, time.Time{}, errors.New(tr("weather_12", maxDays))
 	}
 	loc, err := time.LoadLocation(zone)
 	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("неизвестный часовой пояс: %s", zone)
+		return time.Time{}, time.Time{}, fmt.Errorf(tr("weather_13"), zone)
 	}
 	local := now.In(loc)
 	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
@@ -203,24 +205,31 @@ func pastPeriod(now time.Time, zone string, days int) (time.Time, time.Time, err
 
 func (s *service) weather(ctx context.Context, city City, days int) (WeatherReport, error) {
 	var report WeatherReport
+	now := s.now()
 	if err := city.validate(); err != nil {
 		return report, err
 	}
-	if days < 1 || days > 366 {
-		return report, errors.New("укажите целое число дней от 1 до 366")
+	if days < 1 || days > maxDays {
+		return report, errors.New(tr("weather_12", maxDays))
 	}
 	zone := city.Timezone
 	if zone == "" {
-		yesterday := s.now().UTC().AddDate(0, 0, -1).Format(time.DateOnly)
+		yesterday := now.UTC().AddDate(0, 0, -1).Format(time.DateOnly)
 		metadata, err := s.fetchArchive(ctx, city, "auto", yesterday, yesterday)
 		if err != nil {
 			return report, err
 		}
 		zone = metadata.Timezone
 	}
-	start, end, err := pastPeriod(s.now(), zone, days)
+	start, end, err := pastPeriod(now, zone, days)
 	if err != nil {
 		return report, err
+	}
+	loc, _ := time.LoadLocation(zone)
+	localNow := now.In(loc)
+	today := end.AddDate(0, 0, 1)
+	if localNow.Hour() >= 8 {
+		end = today
 	}
 	report = WeatherReport{City: city, Timezone: zone, Start: start.Format(time.DateOnly), End: end.Format(time.DateOnly)}
 	data, err := s.fetchArchive(ctx, city, zone, report.Start, report.End)
@@ -230,12 +239,14 @@ func (s *service) weather(ctx context.Context, city City, days int) (WeatherRepo
 	hourly := data.Hourly
 	for _, n := range []int{len(hourly.Temperature), len(hourly.Humidity), len(hourly.Code)} {
 		if n != 0 && n != len(hourly.Time) {
-			return report, errors.New("Open-Meteo вернул несогласованные почасовые данные")
+			return report, errors.New(tr("weather_14"))
 		}
 	}
-	loc, _ := time.LoadLocation(zone)
 	byTime := make(map[string]*Observation)
 	for i, epoch := range hourly.Time {
+		if time.Unix(epoch, 0).After(now) {
+			continue
+		}
 		local := time.Unix(epoch, 0).In(loc)
 		if local.Minute() != 0 || local.Second() != 0 || (local.Hour() != 8 && local.Hour() != 14) {
 			continue
@@ -254,7 +265,8 @@ func (s *service) weather(ctx context.Context, city City, days int) (WeatherRepo
 	}
 	for date := start; !date.After(end); date = date.AddDate(0, 0, 1) {
 		day := date.Format(time.DateOnly)
-		report.Rows = append(report.Rows, DayRow{Date: day, Morning: byTime[day+" 08:00"], Afternoon: byTime[day+" 14:00"]})
+		isToday := day == today.Format(time.DateOnly)
+		report.Rows = append(report.Rows, DayRow{Date: day, Morning: byTime[day+" 08:00"], Afternoon: byTime[day+" 14:00"], Today: isToday, MorningPending: isToday && localNow.Hour() < 8, AfternoonPending: isToday && localNow.Hour() < 14})
 	}
 	return report, nil
 }
@@ -262,57 +274,57 @@ func (s *service) weather(ctx context.Context, city City, days int) (WeatherRepo
 // WMO weather interpretation codes returned by Open-Meteo.
 func weatherDescription(code *int) string {
 	if code == nil {
-		return "нет данных"
+		return tr("weather_15")
 	}
 	switch *code {
 	case 0:
-		return "Ясно"
+		return tr("weather_16")
 	case 1:
-		return "Преимущественно ясно"
+		return tr("weather_17")
 	case 2:
-		return "Переменная облачность"
+		return tr("weather_18")
 	case 3:
-		return "Пасмурно"
+		return tr("weather_19")
 	case 45, 48:
-		return "Туман"
+		return tr("weather_20")
 	case 51, 53, 55:
-		return "Морось"
+		return tr("weather_21")
 	case 56, 57:
-		return "Переохлаждённая морось"
+		return tr("weather_22")
 	case 61, 63, 65:
-		return "Дождь"
+		return tr("weather_23")
 	case 66, 67:
-		return "Переохлаждённый дождь"
+		return tr("weather_24")
 	case 71, 73, 75:
-		return "Снег"
+		return tr("weather_25")
 	case 77:
-		return "Снежные зёрна"
+		return tr("weather_26")
 	case 80, 81, 82:
-		return "Ливень"
+		return tr("weather_27")
 	case 85, 86:
-		return "Снежный ливень"
+		return tr("weather_28")
 	case 95:
-		return "Гроза"
+		return tr("weather_29")
 	case 96, 99:
-		return "Гроза с градом"
+		return tr("weather_30")
 	default:
-		return fmt.Sprintf("Код WMO: %d", *code)
+		return fmt.Sprintf(tr("weather_31"), *code)
 	}
 }
 
 func number(value *float64, suffix string) string {
 	if value == nil {
-		return "нет данных"
+		return tr("weather_15")
 	}
 	return fmt.Sprintf("%.1f%s", *value, suffix)
 }
 func observationCells(o *Observation) []string {
 	if o == nil {
-		return []string{"нет данных", "нет данных", "нет данных"}
+		return []string{tr("weather_15"), tr("weather_15"), tr("weather_15")}
 	}
 	conditions := o.Conditions
 	if conditions == "" {
-		conditions = "нет данных"
+		conditions = tr("weather_15")
 	}
-	return []string{number(o.Temp, " °C"), number(o.Humidity, " %"), conditions}
+	return []string{number(o.Temp, tr("weather_32")), number(o.Humidity, tr("weather_33")), conditions}
 }

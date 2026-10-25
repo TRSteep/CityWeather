@@ -2,9 +2,12 @@
 
 package main
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 func showFatal(text string) { fmt.Println(text) }
 func runGUI(_ []City) error {
-	return fmt.Errorf("этот графический интерфейс предназначен для Windows")
+	return errors.New(tr("gui_other_01"))
 }

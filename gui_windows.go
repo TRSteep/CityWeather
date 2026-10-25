@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -119,7 +120,6 @@ const (
 	idCancel
 	idStatus
 	idTable
-	idTitle
 	idQueryLabel
 	idCityLabel
 	idDaysLabel
@@ -129,6 +129,7 @@ const (
 	idCopyMorning
 	idCopyAfternoon
 	idDeleteCity
+	idClearQuery
 )
 const resultMessage = 0x8001
 
@@ -148,7 +149,7 @@ func textOf(hwnd uintptr) string {
 	return syscall.UTF16ToString(buf)
 }
 func showFatal(text string) {
-	user32.NewProc("MessageBoxW").Call(0, uintptr(unsafe.Pointer(utf16(text))), uintptr(unsafe.Pointer(utf16("Архив погоды"))), 0x10)
+	user32.NewProc("MessageBoxW").Call(0, uintptr(unsafe.Pointer(utf16(text))), uintptr(unsafe.Pointer(utf16(windowTitle()))), 0x10)
 }
 
 func runGUI(cities []City) error {
@@ -188,7 +189,7 @@ func runGUI(cities []City) error {
 			gdi32.NewProc("DeleteObject").Call(ui.font)
 		}
 	}()
-	hwnd, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.ClassName)), uintptr(unsafe.Pointer(utf16("Архив погоды"))), 0x00CF0000|0x02000000, 0x80000000, 0x80000000, uintptr(ui.px(1120)), uintptr(ui.px(760)), 0, 0, instance, 0)
+	hwnd, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.ClassName)), uintptr(unsafe.Pointer(utf16(windowTitle()))), 0x00CF0000|0x02000000, 0x80000000, 0x80000000, uintptr(ui.px(1120)), uintptr(ui.px(760)), 0, 0, instance, 0)
 	if hwnd == 0 {
 		return err
 	}
@@ -198,7 +199,7 @@ func runGUI(cities []City) error {
 		return err
 	}
 	if prefsErr != nil {
-		caption(ui.controls[idStatus], "Не удалось прочитать последний город: "+prefsErr.Error())
+		caption(ui.controls[idStatus], tr("gui_windows_01", prefsErr))
 	}
 	ui.layout()
 	user32.NewProc("ShowWindow").Call(hwnd, 5)
@@ -231,29 +232,29 @@ func (ui *weatherUI) build() error {
 		class, text string
 		style       uint32
 	}{
-		{idTitle, "STATIC", "Погода за прошедшие дни", 0},
-		{idQueryLabel, "STATIC", "Поиск города в списке", 0},
+		{idQueryLabel, "STATIC", tr("gui_windows_02"), 0},
 		{idQuery, "EDIT", "", 0x00800000 | 0x00010000 | 0x80},
-		{idSearch, "BUTTON", "Найти в интернете", 0x00010000},
-		{idCityLabel, "STATIC", "Город — выберите из списка или результатов поиска", 0},
+		{idClearQuery, "BUTTON", tr("gui_windows_03"), 0x00010000},
+		{idSearch, "BUTTON", tr("gui_windows_04"), 0x00010000},
+		{idCityLabel, "STATIC", tr("gui_windows_05"), 0},
 		{idCity, "COMBOBOX", "", 0x00010000 | 0x00200000 | 3},
-		{idDeleteCity, "BUTTON", "Удалить город", 0x00010000},
-		{idDaysLabel, "STATIC", "Прошедших дней (1–366)", 0},
-		{idDays, "EDIT", "7", 0x00800000 | 0x00010000 | 0x2000},
-		{idFetch, "BUTTON", "Запросить погоду", 0x00010000 | 1},
-		{idCancel, "BUTTON", "Отмена", 0x00010000},
-		{idCopyMorning, "BUTTON", "Копировать 08:00", 0x00010000},
-		{idCopyAfternoon, "BUTTON", "Копировать 14:00", 0x00010000},
-		{idHint, "STATIC", "08:00 и 14:00 — местное время города. Сегодня не входит в период.", 0},
-		{idStatus, "STATIC", "Выберите город и запросите погоду. По умолчанию — последние 7 завершённых дней.", 0},
-		{idReport, "STATIC", "Результаты появятся здесь после запроса.", 0},
+		{idDeleteCity, "BUTTON", tr("gui_windows_06"), 0x00010000},
+		{idDaysLabel, "STATIC", tr("gui_windows_07", maxDays), 0},
+		{idDays, "EDIT", strconv.Itoa(defaultDays), 0x00800000 | 0x00010000 | 0x2000},
+		{idFetch, "BUTTON", tr("gui_windows_08"), 0x00010000 | 1},
+		{idCancel, "BUTTON", tr("gui_windows_09"), 0x00010000},
+		{idCopyMorning, "BUTTON", tr("gui_windows_10"), 0x00010000},
+		{idCopyAfternoon, "BUTTON", tr("gui_windows_11"), 0x00010000},
+		{idHint, "STATIC", tr("gui_windows_12"), 0},
+		{idStatus, "STATIC", tr("gui_windows_13", defaultDays), 0},
+		{idReport, "STATIC", tr("gui_windows_14"), 0},
 		{idTable, "SysListView32", "", 0x00010000 | 0x00800000 | 1 | 4 | 8},
-		{idSource, "STATIC", "Open-Meteo / ECMWF IFS — модельная оценка погоды  •  Города: GeoNames", 0},
+		{idSource, "STATIC", tr("gui_windows_15"), 0},
 	}
 	for _, c := range controls {
 		h, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(utf16(c.class))), uintptr(unsafe.Pointer(utf16(c.text))), uintptr(0x40000000|0x10000000|c.style), 0, 0, 0, 0, ui.hwnd, uintptr(c.id), 0, 0)
 		if h == 0 {
-			return fmt.Errorf("элемент интерфейса %d: %w", c.id, err)
+			return fmt.Errorf(tr("gui_windows_16"), c.id, err)
 		}
 		ui.controls[c.id] = h
 		send(h, 0x30, font, 1)
@@ -261,8 +262,8 @@ func (ui *weatherUI) build() error {
 	send(ui.controls[idQuery], 0xC5, 200, 0)
 	send(ui.controls[idDays], 0xC5, 3, 0)
 	send(ui.controls[idTable], 0x1036, 0, 0x00010000|0x20|1) // Double buffer, full rows, grid.
-	headers := []string{"Дата", "08:00 · °C", "Влажн. · %", "Погода в 08:00", "14:00 · °C", "Влажн. · %", "Погода в 14:00"}
-	widths := []int{105, 100, 100, 220, 100, 100, 220}
+	headers := []string{tr("gui_windows_17"), tr("gui_windows_18"), tr("gui_windows_19"), tr("gui_windows_20"), tr("gui_windows_21"), tr("gui_windows_19"), tr("gui_windows_22")}
+	widths := []int{180, 100, 100, 200, 100, 100, 200}
 	for i, h := range headers {
 		col := listColumn{Mask: 7, Width: int32(ui.px(widths[i])), Text: utf16(h)}
 		send(ui.controls[idTable], 0x1061, uintptr(i), uintptr(unsafe.Pointer(&col)))
@@ -333,7 +334,7 @@ func (ui *weatherUI) deleteCity() {
 		caption(ui.controls[idStatus], err.Error())
 		return
 	}
-	caption(ui.controls[idStatus], "Город удалён из списка: "+city.label())
+	caption(ui.controls[idStatus], tr("gui_windows_23", city.label()))
 }
 
 func (ui *weatherUI) repaintTable() {
@@ -355,23 +356,23 @@ func (ui *weatherUI) layout() {
 		}
 		user32.NewProc("MoveWindow").Call(ui.controls[id], uintptr(ui.px(x)), uintptr(ui.px(y)), uintptr(ui.px(width)), uintptr(ui.px(height)), 1)
 	}
-	move(idTitle, 24, 18, w-48, 32)
-	move(idQueryLabel, 24, 60, w-240, 24)
-	move(idQuery, 24, 88, w-254, 32)
-	move(idSearch, w-214, 87, 190, 34)
-	move(idCityLabel, 24, 132, w-320, 24)
-	move(idCity, 24, 160, w-510, 320)
-	move(idDeleteCity, w-486, 159, 190, 34)
-	move(idDaysLabel, w-274, 132, 250, 24)
-	move(idDays, w-274, 160, 250, 32)
-	move(idFetch, 24, 212, 244, 34)
-	move(idCancel, 280, 212, 116, 34)
-	move(idCopyMorning, w-420, 212, 192, 34)
-	move(idCopyAfternoon, w-216, 212, 192, 34)
-	move(idHint, 24, 260, w-48, 24)
-	move(idStatus, 24, 293, w-48, 24)
-	move(idReport, 24, 321, w-48, 28)
-	move(idTable, 24, 355, w-48, h-403)
+	move(idQueryLabel, 24, 18, w-240, 24)
+	move(idQuery, 24, 46, w-298, 32)
+	move(idClearQuery, w-266, 45, 40, 34)
+	move(idSearch, w-214, 45, 190, 34)
+	move(idCityLabel, 24, 90, w-320, 24)
+	move(idCity, 24, 118, w-510, 320)
+	move(idDeleteCity, w-486, 117, 190, 34)
+	move(idDaysLabel, w-274, 90, 250, 24)
+	move(idDays, w-274, 118, 250, 32)
+	move(idFetch, 24, 170, 244, 34)
+	move(idCancel, 280, 170, 116, 34)
+	move(idCopyMorning, w-420, 170, 192, 34)
+	move(idCopyAfternoon, w-216, 170, 192, 34)
+	move(idHint, 24, 218, w-48, 24)
+	move(idStatus, 24, 251, w-48, 24)
+	move(idReport, 24, 279, w-48, 28)
+	move(idTable, 24, 313, w-48, h-361)
 	move(idSource, 24, h-33, w-48, 25)
 }
 
@@ -384,20 +385,20 @@ func (ui *weatherUI) start(search bool) {
 	days := 0
 	if search {
 		if len([]rune(strings.TrimSpace(query))) < 2 {
-			caption(ui.controls[idStatus], "Для поиска в интернете введите не менее двух букв.")
+			caption(ui.controls[idStatus], tr("gui_windows_24"))
 			return
 		}
 	} else {
 		selected := int32(send(ui.controls[idCity], 0x147, 0, 0))
 		if selected < 0 || int(selected) >= len(ui.visible) {
-			caption(ui.controls[idStatus], "Выберите город. Если его нет в списке, нажмите «Найти в интернете».")
+			caption(ui.controls[idStatus], tr("gui_windows_25"))
 			return
 		}
 		city = ui.visible[selected]
 		var err error
 		days, err = strconv.Atoi(strings.TrimSpace(textOf(ui.controls[idDays])))
-		if err != nil || days < 1 || days > 366 {
-			caption(ui.controls[idStatus], "Укажите целое число дней от 1 до 366.")
+		if err != nil || days < 1 || days > maxDays {
+			caption(ui.controls[idStatus], tr("gui_windows_26", maxDays))
 			return
 		}
 		ui.persistenceWarning = ""
@@ -406,14 +407,14 @@ func (ui *weatherUI) start(search bool) {
 		}
 	}
 	ui.busy = true
-	for _, id := range []int{idQuery, idSearch, idCity, idDays, idFetch} {
+	for _, id := range []int{idQuery, idClearQuery, idSearch, idCity, idDays, idFetch} {
 		ui.enable(id, false)
 	}
 	ui.updateDeleteButton()
 	ui.enable(idCancel, true)
-	status := "Загрузка погоды: " + city.label() + "…"
+	status := tr("gui_windows_27", city.label())
 	if search {
-		status = "Поиск городов в интернете…"
+		status = tr("gui_windows_28")
 	}
 	caption(ui.controls[idStatus], status)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -441,18 +442,18 @@ func (ui *weatherUI) completed() {
 	}
 	ui.busy = false
 	ui.cancel = nil
-	for _, id := range []int{idQuery, idSearch, idCity, idDays, idFetch} {
+	for _, id := range []int{idQuery, idClearQuery, idSearch, idCity, idDays, idFetch} {
 		ui.enable(id, true)
 	}
 	ui.updateDeleteButton()
 	ui.enable(idCancel, false)
 	if result.err != nil {
-		text := "Ошибка: " + result.err.Error()
+		text := tr("gui_windows_29", result.err)
 		if result.err == context.Canceled {
-			text = "Запрос отменён."
+			text = tr("gui_windows_30")
 		}
 		if result.err == context.DeadlineExceeded {
-			text = "Время ожидания истекло. Повторите запрос."
+			text = tr("gui_windows_31")
 		}
 		if ui.persistenceWarning != "" {
 			text += "; " + ui.persistenceWarning
@@ -462,7 +463,7 @@ func (ui *weatherUI) completed() {
 	}
 	if result.search {
 		ui.setCities(result.cities)
-		caption(ui.controls[idStatus], fmt.Sprintf("Найдено городов: %d. Выберите нужный по региону и стране. Измените поиск для возврата к cities.json.", len(result.cities)))
+		caption(ui.controls[idStatus], fmt.Sprintf(tr("gui_windows_32"), len(result.cities)))
 		return
 	}
 	report := result.report
@@ -480,13 +481,11 @@ func (ui *weatherUI) completed() {
 	send(ui.controls[idTable], 0x1009, 0, 0)
 	missing := 0
 	for i, row := range report.Rows {
-		date, _ := time.Parse(time.DateOnly, row.Date)
-		cells := append([]string{date.Format("02.01.2006")}, observationCells(row.Morning)...)
-		cells = append(cells, observationCells(row.Afternoon)...)
-		if row.Morning == nil || row.Morning.Temp == nil {
+		cells := rowCells(row)
+		if !row.MorningPending && (row.Morning == nil || row.Morning.Temp == nil) {
 			missing++
 		}
-		if row.Afternoon == nil || row.Afternoon.Temp == nil {
+		if !row.AfternoonPending && (row.Afternoon == nil || row.Afternoon.Temp == nil) {
 			missing++
 		}
 		for j, text := range cells {
@@ -500,13 +499,13 @@ func (ui *weatherUI) completed() {
 	}
 	send(ui.controls[idTable], 0xB, 1, 0)
 	user32.NewProc("InvalidateRect").Call(ui.controls[idTable], 0, 1)
-	caption(ui.controls[idReport], fmt.Sprintf("%s • %s — %s • %s", report.City.label(), report.Start, report.End, report.Timezone))
-	status := fmt.Sprintf("Дней: %d. Пропусков: %d. Двойной щелчок по температуре или Ctrl+C — копировать число.", len(report.Rows), missing)
+	caption(ui.controls[idReport], fmt.Sprintf(tr("gui_windows_33"), report.City.label(), report.Start, report.End, report.Timezone))
+	status := fmt.Sprintf(tr("gui_windows_34"), len(report.Rows), missing)
 	if added {
-		status = "Город добавлен в список. " + status
+		status = tr("gui_windows_35") + status
 	}
 	if saveErr != nil {
-		status = saveErr.Error() + ". Погода загружена."
+		status = tr("gui_windows_36", saveErr)
 	}
 	if ui.persistenceWarning != "" {
 		status += " " + ui.persistenceWarning
@@ -520,27 +519,27 @@ func (ui *weatherUI) copyTemperature(column int, all bool) {
 		// LVM_GETNEXTITEM: focused/selected row; the column follows the last cell click.
 		selected := ui.selectedRow
 		if selected < 0 || int(selected) >= len(rows) {
-			caption(ui.controls[idStatus], "Выберите ячейку температуры для копирования.")
+			caption(ui.controls[idStatus], tr("gui_windows_37"))
 			return
 		}
 		rows = rows[selected : selected+1]
 	}
 	value := temperatureText(rows, column)
 	if value == "" && !all {
-		caption(ui.controls[idStatus], "В выбранной ячейке нет температуры.")
+		caption(ui.controls[idStatus], tr("gui_windows_38"))
 		return
 	}
 	if err := copyToClipboard(ui.hwnd, value); err != nil {
-		caption(ui.controls[idStatus], "Не удалось скопировать: "+err.Error())
+		caption(ui.controls[idStatus], tr("gui_windows_39", err))
 		return
 	}
 	timeLabel := "08:00"
 	if column == 4 {
 		timeLabel = "14:00"
 	}
-	message := "Скопировано: " + value
+	message := tr("gui_windows_40", value)
 	if all {
-		message = fmt.Sprintf("Скопирован столбец %s: %d строк, без единиц и заголовка. Пропуски — пустые строки.", timeLabel, len(rows))
+		message = fmt.Sprintf(tr("gui_windows_41"), timeLabel, len(rows))
 	}
 	caption(ui.controls[idStatus], message)
 }
@@ -552,13 +551,13 @@ func copyToClipboard(owner uintptr, text string) error {
 	}
 	opened, _, _ := user32.NewProc("OpenClipboard").Call(owner)
 	if opened == 0 {
-		return fmt.Errorf("буфер обмена занят; повторите попытку")
+		return errors.New(tr("gui_windows_42"))
 	}
 	defer user32.NewProc("CloseClipboard").Call()
 	size := uintptr(len(data) * 2)
 	memory, _, _ := kernel32.NewProc("GlobalAlloc").Call(0x42, size)
 	if memory == 0 {
-		return fmt.Errorf("недостаточно памяти")
+		return errors.New(tr("gui_windows_43"))
 	}
 	transferred := false
 	defer func() {
@@ -568,15 +567,15 @@ func copyToClipboard(owner uintptr, text string) error {
 	}()
 	dest, _, _ := kernel32.NewProc("GlobalLock").Call(memory)
 	if dest == 0 {
-		return fmt.Errorf("не удалось подготовить текст")
+		return errors.New(tr("gui_windows_44"))
 	}
 	kernel32.NewProc("RtlMoveMemory").Call(dest, uintptr(unsafe.Pointer(&data[0])), size)
 	kernel32.NewProc("GlobalUnlock").Call(memory)
 	if ok, _, _ := user32.NewProc("EmptyClipboard").Call(); ok == 0 {
-		return fmt.Errorf("не удалось открыть запись")
+		return errors.New(tr("gui_windows_45"))
 	}
 	if ok, _, _ := user32.NewProc("SetClipboardData").Call(13, memory); ok == 0 {
-		return fmt.Errorf("не удалось записать текст")
+		return errors.New(tr("gui_windows_46"))
 	}
 	transferred = true // Windows owns the global memory after SetClipboardData.
 	return nil
@@ -612,15 +611,12 @@ func (ui *weatherUI) drawCell(draw *listCustomDraw) uintptr {
 		}
 	}
 	if active {
-		background = 0xF5E4D4
+		background, foreground = activeCellBackground, activeCellForeground
 	}
 	brush, _, _ := gdi32.NewProc("CreateSolidBrush").Call(uintptr(background))
 	user32.NewProc("FillRect").Call(draw.DC, uintptr(unsafe.Pointer(&bounds)), brush)
 	gdi32.NewProc("DeleteObject").Call(brush)
-	day := ui.rows[row]
-	date, _ := time.Parse(time.DateOnly, day.Date)
-	cells := append([]string{date.Format("02.01.2006")}, observationCells(day.Morning)...)
-	cells = append(cells, observationCells(day.Afternoon)...)
+	cells := rowCells(ui.rows[row])
 	textBounds := bounds
 	textBounds.Left += int32(ui.px(6))
 	textBounds.Right -= int32(ui.px(4))
@@ -629,7 +625,12 @@ func (ui *weatherUI) drawCell(draw *listCustomDraw) uintptr {
 	gdi32.NewProc("SelectObject").Call(draw.DC, ui.font)
 	user32.NewProc("DrawTextW").Call(draw.DC, uintptr(unsafe.Pointer(utf16(cells[col]))), ^uintptr(0), uintptr(unsafe.Pointer(&textBounds)), 0x4|0x20|0x8000|0x800)
 	if active {
-		border, _, _ := gdi32.NewProc("CreateSolidBrush").Call(0xBB946D)
+		border, _, _ := gdi32.NewProc("CreateSolidBrush").Call(activeCellBorder)
+		user32.NewProc("FrameRect").Call(draw.DC, uintptr(unsafe.Pointer(&bounds)), border)
+		bounds.Left++
+		bounds.Top++
+		bounds.Right--
+		bounds.Bottom--
 		user32.NewProc("FrameRect").Call(draw.DC, uintptr(unsafe.Pointer(&bounds)), border)
 		gdi32.NewProc("DeleteObject").Call(border)
 	}
@@ -707,7 +708,7 @@ func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 		id, notification := int(w&0xFFFF), uint16(w>>16)
 		if id == idQuery && notification == 0x300 && !ui.busy {
 			ui.setCities(filterCities(ui.all, textOf(ui.controls[idQuery])))
-			caption(ui.controls[idStatus], fmt.Sprintf("В локальном списке: %d. Если нужного города нет — нажмите «Найти в интернете».", len(ui.visible)))
+			caption(ui.controls[idStatus], fmt.Sprintf(tr("gui_windows_47"), len(ui.visible)))
 		}
 		if notification == 0 {
 			switch id {
@@ -721,6 +722,11 @@ func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 				ui.copyTemperature(4, true)
 			case idDeleteCity:
 				ui.deleteCity()
+			case idClearQuery:
+				if !ui.busy {
+					caption(ui.controls[idQuery], "")
+					user32.NewProc("SetFocus").Call(ui.controls[idQuery])
+				}
 			case idCancel:
 				if ui.cancel != nil {
 					ui.cancel()

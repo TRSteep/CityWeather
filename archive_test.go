@@ -160,7 +160,7 @@ func TestLiveOpenMeteo(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, row := range report.Rows {
-		if row.Morning == nil || row.Afternoon == nil || row.Morning.Temp == nil || row.Afternoon.Temp == nil {
+		if (!row.MorningPending && (row.Morning == nil || row.Morning.Temp == nil)) || (!row.AfternoonPending && (row.Afternoon == nil || row.Afternoon.Temp == nil)) {
 			t.Fatalf("incomplete real data: %+v", row)
 		}
 	}

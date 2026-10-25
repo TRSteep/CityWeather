@@ -98,7 +98,7 @@ func cityIndex(cities []City, city City) int {
 func (s *cityStore) remember(city City) error {
 	prefs := preferences{LastCity: &city}
 	if err := writeJSON(filepath.Join(s.dir, "settings.json"), prefs); err != nil {
-		return fmt.Errorf("не удалось запомнить город: %w", err)
+		return fmt.Errorf(tr("storage_01"), err)
 	}
 	s.prefs = prefs
 	return nil
@@ -110,7 +110,7 @@ func (s *cityStore) add(city City) (bool, error) {
 	}
 	updated := append(append([]City{}, s.cities...), city)
 	if err := writeJSON(filepath.Join(s.dir, "cities.json"), updated); err != nil {
-		return false, fmt.Errorf("не удалось сохранить город: %w", err)
+		return false, fmt.Errorf(tr("storage_02"), err)
 	}
 	s.cities = updated
 	return true, nil
@@ -119,7 +119,7 @@ func (s *cityStore) add(city City) (bool, error) {
 func (s *cityStore) remove(city City) error {
 	index := cityIndex(s.cities, city)
 	if index < 0 {
-		return errors.New("город не находится в сохранённом списке")
+		return errors.New(tr("storage_03"))
 	}
 	updated := append([]City{}, s.cities[:index]...)
 	updated = append(updated, s.cities[index+1:]...)
@@ -127,12 +127,12 @@ func (s *cityStore) remove(city City) error {
 	// cannot bring a deleted city back into the selector on the next launch.
 	if s.prefs.LastCity != nil && sameCity(*s.prefs.LastCity, city) {
 		if err := writeJSON(filepath.Join(s.dir, "settings.json"), preferences{}); err != nil {
-			return fmt.Errorf("не удалось удалить город: не удалось обновить настройки: %w", err)
+			return fmt.Errorf(tr("storage_04"), err)
 		}
 		s.prefs = preferences{}
 	}
 	if err := writeJSON(filepath.Join(s.dir, "cities.json"), updated); err != nil {
-		return fmt.Errorf("не удалось удалить город: %w", err)
+		return fmt.Errorf(tr("storage_05"), err)
 	}
 	s.cities = updated
 	return nil
