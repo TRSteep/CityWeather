@@ -130,6 +130,7 @@ const (
 	idCopyAfternoon
 	idDeleteCity
 	idClearQuery
+	idChart
 )
 const resultMessage = 0x8001
 
@@ -189,7 +190,7 @@ func runGUI(cities []City) error {
 			gdi32.NewProc("DeleteObject").Call(ui.font)
 		}
 	}()
-	hwnd, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.ClassName)), uintptr(unsafe.Pointer(utf16(windowTitle()))), 0x00CF0000|0x02000000, 0x80000000, 0x80000000, uintptr(ui.px(1120)), uintptr(ui.px(760)), 0, 0, instance, 0)
+	hwnd, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.ClassName)), uintptr(unsafe.Pointer(utf16(windowTitle()))), 0x00CF0000|0x02000000, 0x80000000, 0x80000000, uintptr(ui.px(1120)), uintptr(ui.px(920)), 0, 0, instance, 0)
 	if hwnd == 0 {
 		return err
 	}
@@ -249,6 +250,7 @@ func (ui *weatherUI) build() error {
 		{idStatus, "STATIC", tr("gui_windows_13", defaultDays), 0},
 		{idReport, "STATIC", tr("gui_windows_14"), 0},
 		{idTable, "SysListView32", "", 0x00010000 | 0x00800000 | 1 | 4 | 8},
+		{idChart, "STATIC", tr("chart_title"), 0x00800000 | 0xD}, // SS_OWNERDRAW
 		{idSource, "STATIC", tr("gui_windows_15"), 0},
 	}
 	for _, c := range controls {
@@ -372,7 +374,17 @@ func (ui *weatherUI) layout() {
 	move(idHint, 24, 218, w-48, 24)
 	move(idStatus, 24, 251, w-48, 24)
 	move(idReport, 24, 279, w-48, 28)
-	move(idTable, 24, 313, w-48, h-361)
+	available := h - 361
+	chartHeight := available / 2
+	if chartHeight < 210 {
+		chartHeight = 210
+	}
+	if chartHeight > 340 {
+		chartHeight = 340
+	}
+	tableHeight := available - chartHeight - 12
+	move(idTable, 24, 313, w-48, tableHeight)
+	move(idChart, 24, 313+tableHeight+12, w-48, chartHeight)
 	move(idSource, 24, h-33, w-48, 25)
 }
 
@@ -499,6 +511,7 @@ func (ui *weatherUI) completed() {
 	}
 	send(ui.controls[idTable], 0xB, 1, 0)
 	user32.NewProc("InvalidateRect").Call(ui.controls[idTable], 0, 1)
+	user32.NewProc("InvalidateRect").Call(ui.controls[idChart], 0, 0)
 	caption(ui.controls[idReport], fmt.Sprintf(tr("gui_windows_33"), report.City.label(), report.Start, report.End, report.Timezone))
 	status := fmt.Sprintf(tr("gui_windows_34"), len(report.Rows), missing)
 	if added {
@@ -640,6 +653,14 @@ func (ui *weatherUI) drawCell(draw *listCustomDraw) uintptr {
 func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 	ui := activeUI
 	switch msg {
+	case 0x2B: // WM_DRAWITEM
+		if ui != nil && l != nil {
+			item := (*drawItem)(l)
+			if item.ControlID == idChart {
+				ui.drawChart(item)
+				return 1
+			}
+		}
 	case 0x4E: // WM_NOTIFY
 		if ui == nil || l == nil {
 			break
@@ -693,7 +714,7 @@ func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 	case 0x24: // WM_GETMINMAXINFO
 		if ui != nil {
 			info := (*[5]point)(l)
-			info[3] = point{int32(ui.px(880)), int32(ui.px(600))}
+			info[3] = point{int32(ui.px(880)), int32(ui.px(780))}
 			return 0
 		}
 	case 5:
