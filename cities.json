@@ -1,0 +1,51 @@
+[
+  {
+    "name": "Москва",
+    "country": "Россия",
+    "timezone": "Europe/Moscow",
+    "lat": "55.7558",
+    "lon": "37.6173"
+  },
+  {
+    "name": "Санкт-Петербург",
+    "country": "Россия",
+    "timezone": "Europe/Moscow",
+    "lat": "59.9343",
+    "lon": "30.3351"
+  },
+  {
+    "name": "Лондон",
+    "country": "Великобритания",
+    "timezone": "Europe/London",
+    "lat": "51.5074",
+    "lon": "-0.1278"
+  },
+  {
+    "name": "Нью-Йорк",
+    "country": "США",
+    "timezone": "America/New_York",
+    "lat": "40.7128",
+    "lon": "-74.0060"
+  },
+  {
+    "name": "Токио",
+    "country": "Япония",
+    "timezone": "Asia/Tokyo",
+    "lat": "35.6762",
+    "lon": "139.6503"
+  },
+  {
+    "name": "Уфа",
+    "country": "Россия",
+    "timezone": "Asia/Yekaterinburg",
+    "lat": "54.7388",
+    "lon": "55.9721"
+  },
+  {
+    "name": "Стамбул",
+    "country": "Турция",
+    "timezone": "Europe/Istanbul",
+    "lat": "41.0082",
+    "lon": "28.9784"
+  }
+]

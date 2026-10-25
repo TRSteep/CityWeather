@@ -192,3 +192,8 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Go build outputs
+/weather_archive
+/weather_archive.exe
+/CityWeather.exe
