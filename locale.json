@@ -1,5 +1,12 @@
 {
   "api_language": "ru",
+  "design_subtitle": "Температура в вашем городе — по дням и часам",
+  "design_days_label": "Дней в архиве",
+  "design_version": "Версия %s",
+  "design_search_placeholder": "Введите название города…",
+  "design_empty_report": "Ваш архив погоды",
+  "design_empty_context": "Выберите город и загрузите данные за нужный период",
+  "design_period": "%s — %s  ·  %s",
   "chart_title": "Температура за выбранный период, °C",
   "chart_morning": "08:00",
   "chart_afternoon": "14:00",

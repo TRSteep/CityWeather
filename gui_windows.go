@@ -96,19 +96,24 @@ type uiResult struct {
 	search bool
 }
 type weatherUI struct {
-	hwnd, font         uintptr
-	controls           map[int]uintptr
-	all, visible       []City
-	service            *service
-	results            chan uiResult
-	cancel             context.CancelFunc
-	busy               bool
-	scale              float64
-	rows               []DayRow
-	copyColumn         int
-	selectedRow        int
-	store              cityStore
-	persistenceWarning string
+	hwnd, font                                     uintptr
+	controls                                       map[int]uintptr
+	all, visible                                   []City
+	service                                        *service
+	results                                        chan uiResult
+	cancel                                         context.CancelFunc
+	busy                                           bool
+	scale                                          float64
+	rows                                           []DayRow
+	copyColumn                                     int
+	selectedRow                                    int
+	store                                          cityStore
+	persistenceWarning                             string
+	headingFont, reportFont, labelFont, buttonFont uintptr
+	surfaceBrush, backgroundBrush                  uintptr
+	cards                                          []rect
+	fields                                         map[int]rect
+	hoveredButton                                  uintptr
 }
 
 const (
@@ -131,6 +136,10 @@ const (
 	idDeleteCity
 	idClearQuery
 	idChart
+	idBrand
+	idSubtitle
+	idVersion
+	idContext
 )
 const resultMessage = 0x8001
 
@@ -169,11 +178,13 @@ func runGUI(cities []City) error {
 	comctl32.NewProc("InitCommonControlsEx").Call(uintptr(unsafe.Pointer(&init)))
 	instance, _, _ := kernel32.NewProc("GetModuleHandleW").Call(0)
 	cursor, _, _ := user32.NewProc("LoadCursorW").Call(0, 32512)
-	class := windowClass{Size: uint32(unsafe.Sizeof(windowClass{})), WndProc: windowCallback, Instance: instance, Cursor: cursor, Background: 16, ClassName: utf16("CityWeatherWindow")}
-	// Resource group 1 is the application icon embedded by go generate.
+	background, _, _ := gdi32.NewProc("CreateSolidBrush").Call(themeBackground)
+	defer gdi32.NewProc("DeleteObject").Call(background)
+	class := windowClass{Size: uint32(unsafe.Sizeof(windowClass{})), WndProc: windowCallback, Instance: instance, Cursor: cursor, Background: background, ClassName: utf16("CityWeatherWindow")}
+	// The manifest occupies resource 1, and the application icon group is 2.
 	// LR_SHARED lets Windows manage these class icon handles.
-	class.Icon, _, _ = user32.NewProc("LoadImageW").Call(instance, 1, 1, uintptr(int(32*scale)), uintptr(int(32*scale)), 0x8000)
-	class.SmallIcon, _, _ = user32.NewProc("LoadImageW").Call(instance, 1, 1, uintptr(int(16*scale)), uintptr(int(16*scale)), 0x8000)
+	class.Icon, _, _ = user32.NewProc("LoadImageW").Call(instance, 2, 1, uintptr(int(32*scale)), uintptr(int(32*scale)), 0x8000)
+	class.SmallIcon, _, _ = user32.NewProc("LoadImageW").Call(instance, 2, 1, uintptr(int(16*scale)), uintptr(int(16*scale)), 0x8000)
 	atom, _, err := user32.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&class)))
 	if atom == 0 {
 		return err
@@ -189,8 +200,9 @@ func runGUI(cities []City) error {
 		if ui.font != 0 {
 			gdi32.NewProc("DeleteObject").Call(ui.font)
 		}
+		ui.releaseTheme()
 	}()
-	hwnd, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.ClassName)), uintptr(unsafe.Pointer(utf16(windowTitle()))), 0x00CF0000|0x02000000, 0x80000000, 0x80000000, uintptr(ui.px(1120)), uintptr(ui.px(920)), 0, 0, instance, 0)
+	hwnd, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(class.ClassName)), uintptr(unsafe.Pointer(utf16(windowTitle()))), 0x00CF0000|0x02000000, 0x80000000, 0x80000000, uintptr(ui.px(1120)), uintptr(ui.px(960)), 0, 0, instance, 0)
 	if hwnd == 0 {
 		return err
 	}
@@ -226,34 +238,41 @@ func runGUI(cities []City) error {
 
 func (ui *weatherUI) px(v int) int { return int(float64(v) * ui.scale) }
 func (ui *weatherUI) build() error {
-	font, _, _ := gdi32.NewProc("CreateFontW").Call(uintptr(int32(-ui.px(17))), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, uintptr(unsafe.Pointer(utf16("Segoe UI"))))
+	font := newUIFont(ui.px(16), 400)
 	ui.font = font
 	controls := []struct {
 		id          int
 		class, text string
 		style       uint32
 	}{
+		{idBrand, "STATIC", appName, 0},
+		{idSubtitle, "STATIC", tr("design_subtitle"), 0},
+		{idVersion, "STATIC", tr("design_version", appVersion), 2},
 		{idQueryLabel, "STATIC", tr("gui_windows_02"), 0},
-		{idQuery, "EDIT", "", 0x00800000 | 0x00010000 | 0x80},
+		{idQuery, "EDIT", "", 0x00010000 | 0x80},
 		{idClearQuery, "BUTTON", tr("gui_windows_03"), 0x00010000},
 		{idSearch, "BUTTON", tr("gui_windows_04"), 0x00010000},
 		{idCityLabel, "STATIC", tr("gui_windows_05"), 0},
 		{idCity, "COMBOBOX", "", 0x00010000 | 0x00200000 | 3},
 		{idDeleteCity, "BUTTON", tr("gui_windows_06"), 0x00010000},
-		{idDaysLabel, "STATIC", tr("gui_windows_07", maxDays), 0},
-		{idDays, "EDIT", strconv.Itoa(defaultDays), 0x00800000 | 0x00010000 | 0x2000},
+		{idDaysLabel, "STATIC", tr("design_days_label"), 0},
+		{idDays, "EDIT", strconv.Itoa(defaultDays), 0x00010000 | 0x2000},
 		{idFetch, "BUTTON", tr("gui_windows_08"), 0x00010000 | 1},
 		{idCancel, "BUTTON", tr("gui_windows_09"), 0x00010000},
 		{idCopyMorning, "BUTTON", tr("gui_windows_10"), 0x00010000},
 		{idCopyAfternoon, "BUTTON", tr("gui_windows_11"), 0x00010000},
 		{idHint, "STATIC", tr("gui_windows_12"), 0},
 		{idStatus, "STATIC", tr("gui_windows_13", defaultDays), 0},
-		{idReport, "STATIC", tr("gui_windows_14"), 0},
-		{idTable, "SysListView32", "", 0x00010000 | 0x00800000 | 1 | 4 | 8},
-		{idChart, "STATIC", tr("chart_title"), 0x00800000 | 0xD}, // SS_OWNERDRAW
+		{idReport, "STATIC", tr("design_empty_report"), 0},
+		{idContext, "STATIC", tr("design_empty_context"), 0},
+		{idTable, "SysListView32", "", 0x00010000 | 1 | 4 | 8},
+		{idChart, "STATIC", tr("chart_title"), 0xD}, // SS_OWNERDRAW
 		{idSource, "STATIC", tr("gui_windows_15"), 0},
 	}
 	for _, c := range controls {
+		if c.class == "BUTTON" {
+			c.style = 0x00010000 | 0xB
+		}
 		h, _, err := createWindow.Call(0, uintptr(unsafe.Pointer(utf16(c.class))), uintptr(unsafe.Pointer(utf16(c.text))), uintptr(0x40000000|0x10000000|c.style), 0, 0, 0, 0, ui.hwnd, uintptr(c.id), 0, 0)
 		if h == 0 {
 			return fmt.Errorf(tr("gui_windows_16"), c.id, err)
@@ -261,9 +280,10 @@ func (ui *weatherUI) build() error {
 		ui.controls[c.id] = h
 		send(h, 0x30, font, 1)
 	}
+	ui.initTheme()
 	send(ui.controls[idQuery], 0xC5, 200, 0)
 	send(ui.controls[idDays], 0xC5, 3, 0)
-	send(ui.controls[idTable], 0x1036, 0, 0x00010000|0x20|1) // Double buffer, full rows, grid.
+	send(ui.controls[idTable], 0x1036, 0, 0x00010000|0x20) // Double buffer, full rows.
 	headers := []string{tr("gui_windows_17"), tr("gui_windows_18"), tr("gui_windows_19"), tr("gui_windows_20"), tr("gui_windows_21"), tr("gui_windows_19"), tr("gui_windows_22")}
 	widths := []int{180, 100, 100, 200, 100, 100, 200}
 	for i, h := range headers {
@@ -358,34 +378,48 @@ func (ui *weatherUI) layout() {
 		}
 		user32.NewProc("MoveWindow").Call(ui.controls[id], uintptr(ui.px(x)), uintptr(ui.px(y)), uintptr(ui.px(width)), uintptr(ui.px(height)), 1)
 	}
-	move(idQueryLabel, 24, 18, w-240, 24)
-	move(idQuery, 24, 46, w-298, 32)
-	move(idClearQuery, w-266, 45, 40, 34)
-	move(idSearch, w-214, 45, 190, 34)
-	move(idCityLabel, 24, 90, w-320, 24)
-	move(idCity, 24, 118, w-510, 320)
-	move(idDeleteCity, w-486, 117, 190, 34)
-	move(idDaysLabel, w-274, 90, 250, 24)
-	move(idDays, w-274, 118, 250, 32)
-	move(idFetch, 24, 170, 244, 34)
-	move(idCancel, 280, 170, 116, 34)
-	move(idCopyMorning, w-420, 170, 192, 34)
-	move(idCopyAfternoon, w-216, 170, 192, 34)
-	move(idHint, 24, 218, w-48, 24)
-	move(idStatus, 24, 251, w-48, 24)
-	move(idReport, 24, 279, w-48, 28)
-	available := h - 361
-	chartHeight := available / 2
-	if chartHeight < 210 {
-		chartHeight = 210
+	move(idBrand, 28, 16, w-230, 36)
+	move(idSubtitle, 29, 55, w-200, 22)
+	move(idVersion, w-196, 27, 164, 24)
+	move(idQueryLabel, 44, 108, w-420, 20)
+	move(idQuery, 56, 142, w-512, 24)
+	move(idClearQuery, w-428, 133, 36, 38)
+	move(idSearch, w-380, 133, 184, 38)
+	move(idDaysLabel, w-164, 108, 120, 20)
+	move(idDays, w-152, 142, 96, 24)
+	move(idCityLabel, 44, 181, w-540, 20)
+	move(idCity, 44, 206, w-660, 320)
+	move(idDeleteCity, w-588, 205, 144, 38)
+	move(idFetch, w-428, 205, 248, 38)
+	move(idCancel, w-164, 205, 120, 38)
+	move(idHint, 28, 268, w-56, 22)
+	move(idReport, 44, 318, w-500, 30)
+	move(idContext, 44, 353, w-88, 22)
+	move(idCopyMorning, w-430, 316, 180, 36)
+	move(idCopyAfternoon, w-234, 316, 190, 36)
+	available := h - 500
+	chartHeight := available * 48 / 100
+	if chartHeight < 170 {
+		chartHeight = 170
 	}
-	if chartHeight > 340 {
-		chartHeight = 340
+	if chartHeight > 320 {
+		chartHeight = 320
 	}
-	tableHeight := available - chartHeight - 12
-	move(idTable, 24, 313, w-48, tableHeight)
-	move(idChart, 24, 313+tableHeight+12, w-48, chartHeight)
-	move(idSource, 24, h-33, w-48, 25)
+	tableHeight := available - chartHeight
+	chartTop := 388 + tableHeight + 44
+	move(idTable, 40, 388, w-80, tableHeight)
+	move(idChart, 32, chartTop, w-64, chartHeight-16)
+	move(idStatus, 28, h-54, w-56, 22)
+	move(idSource, 28, h-29, w-56, 20)
+	pxRect := func(x, y, width, height int) rect {
+		return rect{int32(ui.px(x)), int32(ui.px(y)), int32(ui.px(x + width)), int32(ui.px(y + height))}
+	}
+	ui.cards = []rect{pxRect(24, 92, w-48, 164), pxRect(24, 304, w-48, tableHeight+100), pxRect(24, chartTop-8, w-48, chartHeight)}
+	ui.fields = map[int]rect{idQuery: pxRect(44, 134, w-488, 36), idDays: pxRect(w-164, 134, 120, 36)}
+	user32.NewProc("InvalidateRect").Call(ui.hwnd, 0, 0)
+	// Owner-drawn controls must repaint the whole content after a resize.
+	user32.NewProc("InvalidateRect").Call(ui.controls[idChart], 0, 0)
+	user32.NewProc("InvalidateRect").Call(send(ui.controls[idTable], 0x101F, 0, 0), 0, 0)
 }
 
 func (ui *weatherUI) start(search bool) {
@@ -512,7 +546,8 @@ func (ui *weatherUI) completed() {
 	send(ui.controls[idTable], 0xB, 1, 0)
 	user32.NewProc("InvalidateRect").Call(ui.controls[idTable], 0, 1)
 	user32.NewProc("InvalidateRect").Call(ui.controls[idChart], 0, 0)
-	caption(ui.controls[idReport], fmt.Sprintf(tr("gui_windows_33"), report.City.label(), report.Start, report.End, report.Timezone))
+	caption(ui.controls[idReport], report.City.label())
+	caption(ui.controls[idContext], tr("design_period", report.Start, report.End, report.Timezone))
 	status := fmt.Sprintf(tr("gui_windows_34"), len(report.Rows), missing)
 	if added {
 		status = tr("gui_windows_35") + status
@@ -605,12 +640,12 @@ func (ui *weatherUI) drawCell(draw *listCustomDraw) uintptr {
 	if col == 0 {
 		bounds.Right = bounds.Left + int32(send(ui.controls[idTable], 0x101D, 0, 0))
 	}
-	background, foreground := uint32(0xFFFFFF), uint32(0x302A24)
+	background, foreground := uint32(themeSurface), uint32(themeText)
 	if col == 1 {
-		background, foreground = 0xFFF2E6, 0x854500
+		background, foreground = 0xFFF7F0, 0xB66525
 	}
 	if col == 4 {
-		background, foreground = 0xE6F1FF, 0x194A91
+		background, foreground = 0xF0F8FF, 0x2263B4
 	}
 	active := row == ui.selectedRow && col == ui.copyColumn
 	if row == ui.selectedRow {
@@ -631,11 +666,15 @@ func (ui *weatherUI) drawCell(draw *listCustomDraw) uintptr {
 	gdi32.NewProc("DeleteObject").Call(brush)
 	cells := rowCells(ui.rows[row])
 	textBounds := bounds
-	textBounds.Left += int32(ui.px(6))
+	textBounds.Left += int32(ui.px(10))
 	textBounds.Right -= int32(ui.px(4))
 	gdi32.NewProc("SetBkMode").Call(draw.DC, 1)
 	gdi32.NewProc("SetTextColor").Call(draw.DC, uintptr(foreground))
-	gdi32.NewProc("SelectObject").Call(draw.DC, ui.font)
+	font := ui.font
+	if col == 1 || col == 4 {
+		font = ui.buttonFont
+	}
+	gdi32.NewProc("SelectObject").Call(draw.DC, font)
 	user32.NewProc("DrawTextW").Call(draw.DC, uintptr(unsafe.Pointer(utf16(cells[col]))), ^uintptr(0), uintptr(unsafe.Pointer(&textBounds)), 0x4|0x20|0x8000|0x800)
 	if active {
 		border, _, _ := gdi32.NewProc("CreateSolidBrush").Call(activeCellBorder)
@@ -647,17 +686,56 @@ func (ui *weatherUI) drawCell(draw *listCustomDraw) uintptr {
 		user32.NewProc("FrameRect").Call(draw.DC, uintptr(unsafe.Pointer(&bounds)), border)
 		gdi32.NewProc("DeleteObject").Call(border)
 	}
+	if !active {
+		fillColor(draw.DC, rect{bounds.Left, bounds.Bottom - 1, bounds.Right, bounds.Bottom}, 0xFAF7F4)
+	}
 	return 4 // CDRF_SKIPDEFAULT prevents the bright native selection overlay.
 }
 
 func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 	ui := activeUI
 	switch msg {
+	case 0xF: // WM_PAINT: background and surface cards.
+		if ui != nil && ui.hwnd != 0 {
+			var paint paintInfo
+			dc, _, _ := user32.NewProc("BeginPaint").Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+			ui.paintBackground(dc)
+			user32.NewProc("EndPaint").Call(hwnd, uintptr(unsafe.Pointer(&paint)))
+			return 0
+		}
+	case 0x133, 0x134, 0x135, 0x138: // WM_CTLCOLOR* for native edit, list and text controls.
+		if ui != nil && ui.surfaceBrush != 0 {
+			surface := false
+			if msg != 0x138 {
+				surface = true
+			}
+			for _, id := range []int{idQueryLabel, idCityLabel, idDaysLabel, idReport, idContext} {
+				if uintptr(l) == ui.controls[id] {
+					surface = true
+				}
+			}
+			color := uint32(themeMuted)
+			if uintptr(l) == ui.controls[idBrand] || uintptr(l) == ui.controls[idReport] || msg != 0x138 {
+				color = themeText
+			}
+			gdi32.NewProc("SetTextColor").Call(w, uintptr(color))
+			gdi32.NewProc("SetBkMode").Call(w, 1)
+			if surface {
+				gdi32.NewProc("SetBkColor").Call(w, themeSurface)
+				return ui.surfaceBrush
+			}
+			gdi32.NewProc("SetBkColor").Call(w, themeBackground)
+			return ui.backgroundBrush
+		}
 	case 0x2B: // WM_DRAWITEM
 		if ui != nil && l != nil {
 			item := (*drawItem)(l)
 			if item.ControlID == idChart {
 				ui.drawChart(item)
+				return 1
+			}
+			if item.ControlType == 4 {
+				ui.drawButton(item)
 				return 1
 			}
 		}
@@ -727,6 +805,9 @@ func windowProc(hwnd uintptr, msg uint32, w uintptr, l unsafe.Pointer) uintptr {
 			break
 		}
 		id, notification := int(w&0xFFFF), uint16(w>>16)
+		if (id == idQuery || id == idDays) && (notification == 0x100 || notification == 0x200) {
+			user32.NewProc("InvalidateRect").Call(ui.hwnd, 0, 0)
+		}
 		if id == idQuery && notification == 0x300 && !ui.busy {
 			ui.setCities(filterCities(ui.all, textOf(ui.controls[idQuery])))
 			caption(ui.controls[idStatus], fmt.Sprintf(tr("gui_windows_47"), len(ui.visible)))

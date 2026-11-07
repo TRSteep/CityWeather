@@ -18,6 +18,7 @@ type drawItem struct {
 
 // Draw into a memory bitmap so resizing or reloading never exposes half a chart.
 func (ui *weatherUI) drawChart(item *drawItem) {
+	user32.NewProc("GetClientRect").Call(item.Window, uintptr(unsafe.Pointer(&item.Bounds)))
 	w, h := int(item.Bounds.Right-item.Bounds.Left), int(item.Bounds.Bottom-item.Bounds.Top)
 	if w < 1 || h < 1 {
 		return
@@ -48,11 +49,11 @@ func (ui *weatherUI) paintChart(dc uintptr, w, h int) {
 	white, _, _ := gdi32.NewProc("CreateSolidBrush").Call(0xFFFFFF)
 	user32.NewProc("FillRect").Call(dc, uintptr(unsafe.Pointer(&area)), white)
 	gdi32.NewProc("DeleteObject").Call(white)
-	gdi32.NewProc("SelectObject").Call(dc, ui.font)
+	gdi32.NewProc("SelectObject").Call(dc, ui.labelFont)
 	gdi32.NewProc("SetBkMode").Call(dc, 1)
 	text := func(value string, x, y, width, height int, align uintptr) {
 		bounds := rect{int32(x), int32(y), int32(x + width), int32(y + height)}
-		gdi32.NewProc("SetTextColor").Call(dc, 0x4F4438)
+		gdi32.NewProc("SetTextColor").Call(dc, themeMuted)
 		user32.NewProc("DrawTextW").Call(dc, uintptr(unsafe.Pointer(utf16(value))), ^uintptr(0), uintptr(unsafe.Pointer(&bounds)), 0x20|0x4|0x8000|0x800|align)
 	}
 	line := func(x1, y1, x2, y2 int, color uint32, width int) {
@@ -63,7 +64,7 @@ func (ui *weatherUI) paintChart(dc uintptr, w, h int) {
 		gdi32.NewProc("SelectObject").Call(dc, old)
 		gdi32.NewProc("DeleteObject").Call(pen)
 	}
-	text(tr("chart_title"), ui.px(14), ui.px(7), w-ui.px(290), ui.px(27), 0)
+	themedText(dc, ui.buttonFont, themeText, tr("chart_title"), rect{int32(ui.px(14)), int32(ui.px(7)), int32(w - ui.px(290)), int32(ui.px(34))}, 0)
 	legendX := w - ui.px(252)
 	for i, entry := range []struct {
 		key   string
@@ -99,9 +100,9 @@ func (ui *weatherUI) paintChart(dc uintptr, w, h int) {
 			value = 0
 		}
 		y := yAt(value)
-		color := uint32(0xEEE9E4)
+		color := uint32(0xF6F2EE)
 		if value == 0 {
-			color = 0xC6B9AD
+			color = 0xE9DFD5
 		}
 		line(left, y, right, y, color, 1)
 		label := strconv.FormatFloat(value, 'f', -1, 64)
@@ -116,8 +117,7 @@ func (ui *weatherUI) paintChart(dc uintptr, w, h int) {
 		label = strconv.FormatFloat(value, 'f', precision, 64)
 		text(label, ui.px(4), y-ui.px(11), left-ui.px(13), ui.px(22), 2)
 	}
-	line(left, top, left, bottom, 0xC6B9AD, 1)
-	line(left, bottom, right, bottom, 0xC6B9AD, 1)
+	line(left, bottom, right, bottom, themeBorder, 1)
 	limit := (right - left) / ui.px(90)
 	if limit < 2 {
 		limit = 2
@@ -128,7 +128,7 @@ func (ui *weatherUI) paintChart(dc uintptr, w, h int) {
 	for _, day := range chartLabelDays(len(ui.rows), limit) {
 		x := xAt(day)
 		date, _ := time.Parse(time.DateOnly, ui.rows[day].Date)
-		line(x, bottom, x, bottom+ui.px(4), 0xC6B9AD, 1)
+		line(x, bottom, x, bottom+ui.px(4), themeBorder, 1)
 		text(date.Format(tr("chart_date_format")), x-ui.px(42), bottom+ui.px(6), ui.px(84), ui.px(24), 1)
 	}
 	for i, segments := range [][][]temperaturePoint{morning, afternoon} {
